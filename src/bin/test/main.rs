@@ -55,7 +55,7 @@ const KEY: [u8; 32] = [
 ];
 
 fn main() {
-    let b = AESBlock256::new(KEY);
+    let b = GJJMBlock256::new(KEY);
 
     let mut block = INPUT;
     b.encrypt(&mut block);

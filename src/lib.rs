@@ -58,6 +58,10 @@ fn gdouble(input: u8) -> u8 {
     }
 }
 
+pub trait GJJMBlock {
+    fn encrypt(&self, state: &mut [u8; 16]);
+    fn decrypt(&self, state: &mut [u8; 16]);
+}
 
 macro_rules! gjjmbz_impl {
     ($name:ident, $KEY_SIZE:expr, $ROUNDS:expr) => {
@@ -247,9 +251,89 @@ macro_rules! gjjmbz_impl {
                 result
             }
         }
+
+        impl GJJMBlock for $name {
+            fn encrypt(&self, state: &mut [u8; 16]) {
+                self.encrypt(state);
+            }
+            fn decrypt(&self, state: &mut [u8; 16]) {
+                self.decrypt(state);
+            }
+        }
     }
 }
 
-gjjmbz_impl!(AESBlock128, 128, 10);
-gjjmbz_impl!(AESBlock192, 192, 12);
-gjjmbz_impl!(AESBlock256, 256, 14);
+gjjmbz_impl!(GJJMBlock128, 128, 10);
+gjjmbz_impl!(GJJMBlock192, 192, 12);
+gjjmbz_impl!(GJJMBlock256, 256, 14);
+
+struct GJJMCBC<T: GJJMBlock> {
+    block: T,
+    state: [u8; 16],
+}
+
+impl<T: GJJMBlock> GJJMCBC<T> {
+    fn new(block: T, iv: [u8; 16]) -> Self {
+        Self {
+            block,
+            state: iv,
+        }
+    }
+
+    fn encrypt<I: Iterator<Item=u8>>(mut self, mut data: I) -> Vec<u8> {
+        let mut result: Vec<u8> = Vec::new();
+        loop {
+            for i in 0..16 {
+                match data.next() {
+                    Some(d) => { self.state[i] ^= d; },
+                    None => {
+                        // Full block
+                        if i == 0 {
+                            return result;
+                        }
+
+                        // Pad
+                        for j in i..16 {
+                            self.state[j] = 0;
+                        }
+
+                        self.block.encrypt(&mut self.state);
+                        result.extend_from_slice(&self.state);
+                        return result;
+                    }
+                }
+            }
+
+            // Block filled
+            self.block.encrypt(&mut self.state);
+            result.extend_from_slice(&self.state);
+        }
+    }
+
+    fn decrypt<I: Iterator<Item=u8>>(mut self, mut data: I) -> Vec<u8> {
+        let mut result: Vec<u8> = Vec::new();
+        let mut current: [u8; 16] = [0; 16];
+        let mut next_state: [u8; 16] = [0; 16];
+
+        loop {
+            for i in 0..16 {
+                match data.next() {
+                    Some(d) => { current[i] = d; },
+                    None => {
+                        // Can only happen on block start
+                        return result;
+                    }
+                }
+            }
+
+            // Block filled
+            next_state = current;
+            self.block.decrypt(&mut current);
+            for i in 0..16 {
+                current[i] ^= self.state[i];
+            }
+            result.extend_from_slice(&current);
+            self.state = next_state;
+        }
+    }
+}
