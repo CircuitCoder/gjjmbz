@@ -1,5 +1,5 @@
-Gao Ji Jia Mi Biao Zhun
-> a.k.a. AES
+# Gao Ji Jia Mi Biao Zhun
+> a.k.a. AES, Advanced Encryption Standard
 
 实现了 AES-{128,192,256}-CBC，可以正确加密，解密。
 
