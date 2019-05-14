@@ -5,3 +5,7 @@ authors = ["Liu Xiaoyi <circuitcoder0@gmail.com>"]
 edition = "2018"
 
 [dependencies]
+structopt = "0.2.15"
+paw-structopt = "1.0.0"
+paw = "1.0.0"
+rand = "0.6.5"

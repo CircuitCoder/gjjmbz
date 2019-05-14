@@ -63,6 +63,15 @@ pub trait GJJMBlock {
     fn decrypt(&self, state: &mut [u8; 16]);
 }
 
+impl<T: GJJMBlock + ?Sized> GJJMBlock for Box<T> {
+    fn encrypt(&self, state: &mut [u8; 16]) {
+        (**self).encrypt(state);
+    }
+    fn decrypt(&self, state: &mut [u8; 16]) {
+        (**self).decrypt(state);
+    }
+}
+
 macro_rules! gjjmbz_impl {
     ($name:ident, $KEY_SIZE:expr, $ROUNDS:expr) => {
         pub struct $name {
@@ -70,19 +79,14 @@ macro_rules! gjjmbz_impl {
         }
 
         impl $name {
-            const KEY_BYTES: usize = $KEY_SIZE / 8;
+            const _KEY_BYTES: usize = $KEY_SIZE / 8;
             const N: usize = $KEY_SIZE / 32;
-            pub fn new(key: [u8; Self::KEY_BYTES]) -> Self {
-                let key: [u32; Self::N] = unsafe { std::mem::transmute(key) };
-
+            pub fn new(key: &[u8]) -> Self {
                 let mut result = Self {
                     key_segs: unsafe { std::mem::uninitialized() },
                 };
 
-                // TODO: memcpy
-                for i in 0..Self::N {
-                    result.key_segs[i] = key[i];
-                }
+                unsafe { std::ptr::copy_nonoverlapping(std::mem::transmute(&key[0]), &mut result.key_segs[0] as *mut u32, Self::N); }
 
                 let mut last = result.key_segs[Self::N-1];
 
@@ -116,7 +120,7 @@ macro_rules! gjjmbz_impl {
 
                 self.add_round_key(&mut state, 0);
 
-                for i in 1..=($ROUNDS-1) {
+                for i in 1..$ROUNDS {
                     // TODO: merge sub_bytes, shift_rows and mix_columns
                     Self::sub_bytes(&mut state);
                     Self::shift_rows(&mut state);
@@ -140,11 +144,11 @@ macro_rules! gjjmbz_impl {
                 }
 
                 self.add_round_key(&mut state, $ROUNDS);
-                for i in (1..=($ROUNDS-1)).rev() {
+                for i in 1..$ROUNDS {
                     // TODO: merge sub_bytes, shift_rows and mix_columns
                     Self::inv_shift_rows(&mut state);
                     Self::inv_sub_bytes(&mut state);
-                    self.add_round_key(&mut state, i);
+                    self.add_round_key(&mut state, $ROUNDS - i);
                     Self::inv_mix_columns(&mut state);
                 }
 
@@ -167,7 +171,7 @@ macro_rules! gjjmbz_impl {
                 println!("");
             }
 
-            fn sub_bytes(state: &mut [u8; 16]) {
+            pub fn sub_bytes(state: &mut [u8; 16]) {
                 for i in 0..16 {
                     state[i] = SBOX[state[i] as usize];
                 }
@@ -179,7 +183,7 @@ macro_rules! gjjmbz_impl {
                 }
             }
 
-            fn shift_rows(state: &mut [u8; 16]) {
+            pub fn shift_rows(state: &mut [u8; 16]) {
                 state[4..8].rotate_left(1);
                 state[8..12].rotate_left(2);
                 state[12..16].rotate_left(3);
@@ -191,7 +195,7 @@ macro_rules! gjjmbz_impl {
                 state[12..16].rotate_right(3);
             }
 
-            fn mix_columns(state: &mut [u8; 16]) {
+            pub fn mix_columns(state: &mut [u8; 16]) {
                 let mut doubles: [u8; 4] = unsafe { std::mem::uninitialized() };
                 let mut copy: [u8; 4] = unsafe { std::mem::uninitialized() };
                 for col in 0..4 {
@@ -232,7 +236,7 @@ macro_rules! gjjmbz_impl {
                 }
             }
 
-            fn add_round_key(&self, state: &mut [u8; 16], rnd: usize) {
+            pub fn add_round_key(&self, state: &mut [u8; 16], rnd: usize) {
                 let key = self.derive_key(rnd);
 
                 for i in 0..16 {
@@ -267,20 +271,31 @@ gjjmbz_impl!(GJJMBlock128, 128, 10);
 gjjmbz_impl!(GJJMBlock192, 192, 12);
 gjjmbz_impl!(GJJMBlock256, 256, 14);
 
-struct GJJMCBC<T: GJJMBlock> {
+pub struct GJJMCBC<T: GJJMBlock> {
     block: T,
     state: [u8; 16],
 }
 
+pub fn cbc_from_key(key: &[u8], iv: [u8; 16]) -> Option<GJJMCBC<impl GJJMBlock>> {
+    let block: Box<GJJMBlock> = match key.len() {
+        16 => Box::new(GJJMBlock128::new(key)),
+        24 => Box::new(GJJMBlock192::new(key)),
+        32 => Box::new(GJJMBlock256::new(key)),
+        _ => return None,
+    };
+
+    Some(GJJMCBC::new(block, iv))
+}
+
 impl<T: GJJMBlock> GJJMCBC<T> {
-    fn new(block: T, iv: [u8; 16]) -> Self {
+    pub fn new(block: T, iv: [u8; 16]) -> Self {
         Self {
             block,
             state: iv,
         }
     }
 
-    fn encrypt<I: Iterator<Item=u8>>(mut self, mut data: I) -> Vec<u8> {
+    pub fn encrypt<I: Iterator<Item=u8>>(mut self, mut data: I) -> Vec<u8> {
         let mut result: Vec<u8> = Vec::new();
         loop {
             for i in 0..16 {
@@ -310,10 +325,10 @@ impl<T: GJJMBlock> GJJMCBC<T> {
         }
     }
 
-    fn decrypt<I: Iterator<Item=u8>>(mut self, mut data: I) -> Vec<u8> {
+    pub fn decrypt<I: Iterator<Item=u8>>(mut self, mut data: I) -> Vec<u8> {
         let mut result: Vec<u8> = Vec::new();
         let mut current: [u8; 16] = [0; 16];
-        let mut next_state: [u8; 16] = [0; 16];
+        let mut next_state: [u8; 16];
 
         loop {
             for i in 0..16 {
