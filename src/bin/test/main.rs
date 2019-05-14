@@ -19,7 +19,7 @@ const INPUT: [u8; 16] = [
     0xd4,
 ];
 
-const KEY: [u8; 16] = [
+const KEY: [u8; 32] = [
     0x00,
     0x01,
     0x02,
@@ -36,10 +36,26 @@ const KEY: [u8; 16] = [
     0x0d,
     0x0e,
     0x0f,
+    0x10,
+    0x11,
+    0x12,
+    0x13,
+    0x14,
+    0x15,
+    0x16,
+    0x17,
+    0x18,
+    0x19,
+    0x1a,
+    0x1b,
+    0x1c,
+    0x1d,
+    0x1e,
+    0x1f,
 ];
 
 fn main() {
-    let b = AESBlock::new(KEY);
+    let b = AESBlock256::new(KEY);
 
     let mut block = INPUT;
     b.encrypt(&mut block);

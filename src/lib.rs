@@ -1,8 +1,3 @@
-const KEY_SIZE: usize = 128;
-const KEY_BYTES: usize = KEY_SIZE / 8;
-const ROUNDS: usize = 10;
-const N: usize = KEY_SIZE / 32;
-
 const SBOX: [u8; 256] = [
     0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
     0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,
@@ -63,187 +58,198 @@ fn gdouble(input: u8) -> u8 {
     }
 }
 
-pub struct AESBlock {
-    key_segs: [u32; 4 * ROUNDS + 4],
+
+macro_rules! gjjmbz_impl {
+    ($name:ident, $KEY_SIZE:expr, $ROUNDS:expr) => {
+        pub struct $name {
+            key_segs: [u32; 4 * $ROUNDS + 4],
+        }
+
+        impl $name {
+            const KEY_BYTES: usize = $KEY_SIZE / 8;
+            const N: usize = $KEY_SIZE / 32;
+            pub fn new(key: [u8; Self::KEY_BYTES]) -> Self {
+                let key: [u32; Self::N] = unsafe { std::mem::transmute(key) };
+
+                let mut result = Self {
+                    key_segs: unsafe { std::mem::uninitialized() },
+                };
+
+                // TODO: memcpy
+                for i in 0..Self::N {
+                    result.key_segs[i] = key[i];
+                }
+
+                let mut last = result.key_segs[Self::N-1];
+
+                for i in Self::N..(4 * $ROUNDS + 4) {
+                    last = if i % Self::N == 0 {
+                        result.key_segs[i-Self::N] ^ Self::sub_word(last.rotate_right(8)) ^ RNDC[i / Self::N]
+                    } else if Self::N > 6 && i % Self::N == 4 {
+                        result.key_segs[i-Self::N] ^ Self::sub_word(last)
+                    } else {
+                        result.key_segs[i-Self::N] ^ last
+                    };
+
+                    result.key_segs[i] = last;
+                }
+
+                result
+            }
+
+            fn sub_word(w: u32) -> u32 {
+                (SBOX[(w>>24) as usize] as u32) << 24
+                    | (SBOX[((w>>16)&0xff) as usize] as u32) << 16
+                    | (SBOX[((w>>8)&0xff) as usize] as u32) << 8
+                    | SBOX[(w&0xff) as usize] as u32
+            }
+
+            pub fn encrypt(&self, _state: &mut [u8; 16]) {
+                let mut state: [u8; 16] = unsafe { std::mem::uninitialized() };
+                for i in 0..16 {
+                    state[i] = _state[COLMAP[i]];
+                }
+
+                self.add_round_key(&mut state, 0);
+
+                for i in 1..=($ROUNDS-1) {
+                    // TODO: merge sub_bytes, shift_rows and mix_columns
+                    Self::sub_bytes(&mut state);
+                    Self::shift_rows(&mut state);
+                    Self::mix_columns(&mut state);
+                    self.add_round_key(&mut state, i);
+                }
+
+                Self::sub_bytes(&mut state);
+                Self::shift_rows(&mut state);
+                self.add_round_key(&mut state, $ROUNDS);
+
+                for i in 0..16 {
+                    _state[i] = state[COLMAP[i]];
+                }
+            }
+
+            pub fn decrypt(&self, _state: &mut [u8; 16]) {
+                let mut state: [u8; 16] = unsafe { std::mem::uninitialized() };
+                for i in 0..16 {
+                    state[i] = _state[COLMAP[i]];
+                }
+
+                self.add_round_key(&mut state, $ROUNDS);
+                for i in (1..=($ROUNDS-1)).rev() {
+                    // TODO: merge sub_bytes, shift_rows and mix_columns
+                    Self::inv_shift_rows(&mut state);
+                    Self::inv_sub_bytes(&mut state);
+                    self.add_round_key(&mut state, i);
+                    Self::inv_mix_columns(&mut state);
+                }
+
+                Self::inv_shift_rows(&mut state);
+                Self::inv_sub_bytes(&mut state);
+                self.add_round_key(&mut state, 0);
+
+                for i in 0..16 {
+                    _state[i] = state[COLMAP[i]];
+                }
+            }
+
+            pub fn print(state: &[u8; 16]) {
+                for i in 0..4 {
+                    for j in 0..4 {
+                        print!("{:0>2x} ", state[i*4+j]);
+                    }
+                    println!("");
+                }
+                println!("");
+            }
+
+            fn sub_bytes(state: &mut [u8; 16]) {
+                for i in 0..16 {
+                    state[i] = SBOX[state[i] as usize];
+                }
+            }
+
+            fn inv_sub_bytes(state: &mut [u8; 16]) {
+                for i in 0..16 {
+                    state[i] = INVSBOX[state[i] as usize];
+                }
+            }
+
+            fn shift_rows(state: &mut [u8; 16]) {
+                state[4..8].rotate_left(1);
+                state[8..12].rotate_left(2);
+                state[12..16].rotate_left(3);
+            }
+
+            fn inv_shift_rows(state: &mut [u8; 16]) {
+                state[4..8].rotate_right(1);
+                state[8..12].rotate_right(2);
+                state[12..16].rotate_right(3);
+            }
+
+            fn mix_columns(state: &mut [u8; 16]) {
+                let mut doubles: [u8; 4] = unsafe { std::mem::uninitialized() };
+                let mut copy: [u8; 4] = unsafe { std::mem::uninitialized() };
+                for col in 0..4 {
+                    for row in 0..4 {
+                        copy[row] = state[row * 4 + col] ;
+                        doubles[row] = gdouble(copy[row]);
+                    }
+
+                    for row in 0..4 {
+                        state[row * 4 + col] = doubles[row]
+                            ^ doubles[(row + 1) % 4]
+                            ^ copy[(row + 1) % 4]
+                            ^ copy[(row + 2) % 4]
+                            ^ copy[(row + 3) % 4]
+                    }
+                }
+            }
+
+            fn inv_mix_columns(state: &mut [u8; 16]) {
+                let mut octas: [u8; 4] = unsafe { std::mem::uninitialized() };
+                let mut quads: [u8; 4] = unsafe { std::mem::uninitialized() };
+                let mut doubles: [u8; 4] = unsafe { std::mem::uninitialized() };
+                let mut copy: [u8; 4] = unsafe { std::mem::uninitialized() };
+                for col in 0..4 {
+                    for row in 0..4 {
+                        copy[row] = state[row * 4 + col] ;
+                        doubles[row] = gdouble(copy[row]);
+                        quads[row] = gdouble(doubles[row]);
+                        octas[row] = gdouble(quads[row]);
+                    }
+
+                    for row in 0..4 {
+                        state[row * 4 + col] = octas[row] ^ quads[row] ^ doubles[row]
+                            ^ octas[(row + 1) % 4] ^ doubles[(row + 1) % 4] ^ copy[(row + 1) % 4]
+                            ^ octas[(row + 2) % 4] ^ quads[(row + 2) % 4] ^ copy[(row + 2) % 4]
+                            ^ octas[(row + 3) % 4] ^ copy[(row + 3) % 4];
+                    }
+                }
+            }
+
+            fn add_round_key(&self, state: &mut [u8; 16], rnd: usize) {
+                let key = self.derive_key(rnd);
+
+                for i in 0..16 {
+                    state[i] ^= key[i];
+                }
+            }
+
+            fn derive_key(&self, rnd: usize) -> [u8; 16] {
+                let mut result: [u8; 16] = unsafe { std::mem::uninitialized() };
+
+                // Assumes little endian
+                for i in 0..16 {
+                    result[i] = (self.key_segs[rnd * 4 + i % 4] >> (i / 4 * 8)) as u8;
+                }
+
+                result
+            }
+        }
+    }
 }
 
-impl AESBlock {
-    pub fn new(key: [u8; KEY_BYTES]) -> AESBlock {
-        let key: [u32; N] = unsafe { std::mem::transmute(key) };
-
-        let mut result = AESBlock {
-            key_segs: unsafe { std::mem::uninitialized() },
-        };
-
-        // TODO: memcpy
-        for i in 0..N {
-            result.key_segs[i] = key[i];
-        }
-
-        let mut last = result.key_segs[N-1];
-
-        for i in N..(4 * ROUNDS + 4) {
-            last = if i % N == 0 {
-                result.key_segs[i-N] ^ Self::sub_word(last.rotate_right(8)) ^ RNDC[i / N]
-            } else if N > 6 && i % N == 4 {
-                result.key_segs[i-N] ^ Self::sub_word(last)
-            } else {
-                result.key_segs[i-N] ^ last
-            };
-
-            result.key_segs[i] = last;
-        }
-
-        result
-    }
-
-    fn sub_word(w: u32) -> u32 {
-        (SBOX[(w>>24) as usize] as u32) << 24
-            | (SBOX[((w>>16)&0xff) as usize] as u32) << 16
-            | (SBOX[((w>>8)&0xff) as usize] as u32) << 8
-            | SBOX[(w&0xff) as usize] as u32
-    }
-
-    pub fn encrypt(&self, _state: &mut [u8; 16]) {
-        let mut state: [u8; 16] = unsafe { std::mem::uninitialized() };
-        for i in 0..16 {
-            state[i] = _state[COLMAP[i]];
-        }
-
-        self.add_round_key(&mut state, 0);
-
-        for i in 1..=(ROUNDS-1) {
-            // TODO: merge sub_bytes, shift_rows and mix_columns
-            Self::sub_bytes(&mut state);
-            Self::shift_rows(&mut state);
-            Self::mix_columns(&mut state);
-            self.add_round_key(&mut state, i);
-        }
-
-        Self::sub_bytes(&mut state);
-        Self::shift_rows(&mut state);
-        self.add_round_key(&mut state, ROUNDS);
-
-        for i in 0..16 {
-            _state[i] = state[COLMAP[i]];
-        }
-    }
-
-    pub fn decrypt(&self, _state: &mut [u8; 16]) {
-        let mut state: [u8; 16] = unsafe { std::mem::uninitialized() };
-        for i in 0..16 {
-            state[i] = _state[COLMAP[i]];
-        }
-
-        self.add_round_key(&mut state, ROUNDS);
-        for i in (1..=(ROUNDS-1)).rev() {
-            // TODO: merge sub_bytes, shift_rows and mix_columns
-            Self::inv_shift_rows(&mut state);
-            Self::inv_sub_bytes(&mut state);
-            self.add_round_key(&mut state, i);
-            Self::inv_mix_columns(&mut state);
-        }
-
-        Self::inv_shift_rows(&mut state);
-        Self::inv_sub_bytes(&mut state);
-        self.add_round_key(&mut state, 0);
-
-        for i in 0..16 {
-            _state[i] = state[COLMAP[i]];
-        }
-    }
-
-    fn print(state: &[u8; 16]) {
-        for i in 0..4 {
-            for j in 0..4 {
-                print!("{:0>2x} ", state[i*4+j]);
-            }
-            println!("");
-        }
-        println!("");
-    }
-
-    fn sub_bytes(state: &mut [u8; 16]) {
-        for i in 0..16 {
-            state[i] = SBOX[state[i] as usize];
-        }
-    }
-
-    fn inv_sub_bytes(state: &mut [u8; 16]) {
-        for i in 0..16 {
-            state[i] = INVSBOX[state[i] as usize];
-        }
-    }
-
-    fn shift_rows(state: &mut [u8; 16]) {
-        state[4..8].rotate_left(1);
-        state[8..12].rotate_left(2);
-        state[12..16].rotate_left(3);
-    }
-
-    fn inv_shift_rows(state: &mut [u8; 16]) {
-        state[4..8].rotate_right(1);
-        state[8..12].rotate_right(2);
-        state[12..16].rotate_right(3);
-    }
-
-    fn mix_columns(state: &mut [u8; 16]) {
-        let mut doubles: [u8; 4] = unsafe { std::mem::uninitialized() };
-        let mut copy: [u8; 4] = unsafe { std::mem::uninitialized() };
-        for col in 0..4 {
-            for row in 0..4 {
-                copy[row] = state[row * 4 + col] ;
-                doubles[row] = gdouble(copy[row]);
-            }
-
-            for row in 0..4 {
-                state[row * 4 + col] = doubles[row]
-                    ^ doubles[(row + 1) % 4]
-                    ^ copy[(row + 1) % 4]
-                    ^ copy[(row + 2) % 4]
-                    ^ copy[(row + 3) % 4]
-            }
-        }
-    }
-
-    fn inv_mix_columns(state: &mut [u8; 16]) {
-        let mut octas: [u8; 4] = unsafe { std::mem::uninitialized() };
-        let mut quads: [u8; 4] = unsafe { std::mem::uninitialized() };
-        let mut doubles: [u8; 4] = unsafe { std::mem::uninitialized() };
-        let mut copy: [u8; 4] = unsafe { std::mem::uninitialized() };
-        for col in 0..4 {
-            for row in 0..4 {
-                copy[row] = state[row * 4 + col] ;
-                doubles[row] = gdouble(copy[row]);
-                quads[row] = gdouble(doubles[row]);
-                octas[row] = gdouble(quads[row]);
-            }
-
-            for row in 0..4 {
-                state[row * 4 + col] = octas[row] ^ quads[row] ^ doubles[row]
-                    ^ octas[(row + 1) % 4] ^ doubles[(row + 1) % 4] ^ copy[(row + 1) % 4]
-                    ^ octas[(row + 2) % 4] ^ quads[(row + 2) % 4] ^ copy[(row + 2) % 4]
-                    ^ octas[(row + 3) % 4] ^ copy[(row + 3) % 4];
-            }
-        }
-    }
-
-    fn add_round_key(&self, state: &mut [u8; 16], rnd: usize) {
-        let key = self.derive_key(rnd);
-
-        for i in 0..16 {
-            state[i] ^= key[i];
-        }
-    }
-
-    fn derive_key(&self, rnd: usize) -> [u8; 16] {
-        let mut result: [u8; 16] = unsafe { std::mem::uninitialized() };
-
-        // Assumes little endian
-        for i in 0..16 {
-            result[i] = (self.key_segs[rnd * 4 + i % 4] >> (i / 4 * 8)) as u8;
-        }
-
-        result
-    }
-}
+gjjmbz_impl!(AESBlock128, 128, 10);
+gjjmbz_impl!(AESBlock192, 192, 12);
+gjjmbz_impl!(AESBlock256, 256, 14);
