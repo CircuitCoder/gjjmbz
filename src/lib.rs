@@ -171,7 +171,7 @@ macro_rules! gjjmbz_impl {
                 println!("");
             }
 
-            pub fn sub_bytes(state: &mut [u8; 16]) {
+            fn sub_bytes(state: &mut [u8; 16]) {
                 for i in 0..16 {
                     state[i] = SBOX[state[i] as usize];
                 }
@@ -183,7 +183,7 @@ macro_rules! gjjmbz_impl {
                 }
             }
 
-            pub fn shift_rows(state: &mut [u8; 16]) {
+            fn shift_rows(state: &mut [u8; 16]) {
                 state[4..8].rotate_left(1);
                 state[8..12].rotate_left(2);
                 state[12..16].rotate_left(3);
@@ -195,7 +195,7 @@ macro_rules! gjjmbz_impl {
                 state[12..16].rotate_right(3);
             }
 
-            pub fn mix_columns(state: &mut [u8; 16]) {
+            fn mix_columns(state: &mut [u8; 16]) {
                 let mut doubles: [u8; 4] = unsafe { std::mem::uninitialized() };
                 let mut copy: [u8; 4] = unsafe { std::mem::uninitialized() };
                 for col in 0..4 {
@@ -271,20 +271,22 @@ gjjmbz_impl!(GJJMBlock128, 128, 10);
 gjjmbz_impl!(GJJMBlock192, 192, 12);
 gjjmbz_impl!(GJJMBlock256, 256, 14);
 
+pub fn block_from_key(key: &[u8]) -> Option<Box<GJJMBlock>> {
+    Some(match key.len() {
+        16 => Box::new(GJJMBlock128::new(key)),
+        24 => Box::new(GJJMBlock192::new(key)),
+        32 => Box::new(GJJMBlock256::new(key)),
+        _ => return None,
+    })
+}
+
 pub struct GJJMCBC<T: GJJMBlock> {
     block: T,
     state: [u8; 16],
 }
 
 pub fn cbc_from_key(key: &[u8], iv: [u8; 16]) -> Option<GJJMCBC<impl GJJMBlock>> {
-    let block: Box<GJJMBlock> = match key.len() {
-        16 => Box::new(GJJMBlock128::new(key)),
-        24 => Box::new(GJJMBlock192::new(key)),
-        32 => Box::new(GJJMBlock256::new(key)),
-        _ => return None,
-    };
-
-    Some(GJJMCBC::new(block, iv))
+    block_from_key(key).map(|e| GJJMCBC::new(e, iv))
 }
 
 impl<T: GJJMBlock> GJJMCBC<T> {
