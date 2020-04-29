@@ -49,13 +49,11 @@ const COLMAP: [usize; 16] = [
     3, 7, 11, 15,
 ];
 
+#[inline(always)]
 fn gdouble(input: u8) -> u8 {
     let hi_bit = input & 0x80;
-    if hi_bit != 0 {
-        (input << 1) ^ 0x1B
-    } else {
-        input << 1
-    }
+    let muxed = (hi_bit-1) & 0x1B;
+    return (input << 1) ^ muxed;
 }
 
 pub trait GJJMBlock {
@@ -184,9 +182,24 @@ macro_rules! gjjmbz_impl {
             }
 
             fn shift_rows(state: &mut [u8; 16]) {
-                state[4..8].rotate_left(1);
-                state[8..12].rotate_left(2);
-                state[12..16].rotate_left(3);
+                let tmp = state[4];
+                state[4] = state[5];
+                state[5] = state[6];
+                state[6] = state[7];
+                state[7] = tmp;
+
+                let tmp = state[8];
+                state[8] = state[10];
+                state[10] = tmp;
+                let tmp = state[9];
+                state[9] = state[11];
+                state[11] = tmp;
+
+                let tmp = state[15];
+                state[15] = state[14];
+                state[14] = state[13];
+                state[13] = state[12];
+                state[12] = tmp;
             }
 
             fn inv_shift_rows(state: &mut [u8; 16]) {
@@ -199,8 +212,13 @@ macro_rules! gjjmbz_impl {
                 let mut doubles: [u8; 4] = unsafe { std::mem::uninitialized() };
                 let mut copy: [u8; 4] = unsafe { std::mem::uninitialized() };
                 for col in 0..4 {
+                    let fullrow = 0;
+                    copy[0] = state[col];
+                    copy[1] = state[4 + col];
+                    copy[2] = state[8 + col];
+                    copy[3] = state[12 + col];
+
                     for row in 0..4 {
-                        copy[row] = state[row * 4 + col] ;
                         doubles[row] = gdouble(copy[row]);
                     }
 
