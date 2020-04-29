@@ -203,9 +203,24 @@ macro_rules! gjjmbz_impl {
             }
 
             fn inv_shift_rows(state: &mut [u8; 16]) {
-                state[4..8].rotate_right(1);
-                state[8..12].rotate_right(2);
-                state[12..16].rotate_right(3);
+                let tmp = state[7];
+                state[7] = state[6];
+                state[6] = state[5];
+                state[5] = state[4];
+                state[4] = tmp;
+
+                let tmp = state[8];
+                state[8] = state[10];
+                state[10] = tmp;
+                let tmp = state[9];
+                state[9] = state[11];
+                state[11] = tmp;
+
+                let tmp = state[12];
+                state[12] = state[13];
+                state[13] = state[14];
+                state[14] = state[15];
+                state[15] = tmp;
             }
 
             fn mix_columns(state: &mut [u8; 16]) {
@@ -254,23 +269,11 @@ macro_rules! gjjmbz_impl {
                 }
             }
 
+            #[inline(always)]
             pub fn add_round_key(&self, state: &mut [u8; 16], rnd: usize) {
-                let key = self.derive_key(rnd);
-
                 for i in 0..16 {
-                    state[i] ^= key[i];
+                    state[i] ^= (self.key_segs[rnd * 4 + i % 4] >> (i / 4 * 8)) as u8;
                 }
-            }
-
-            fn derive_key(&self, rnd: usize) -> [u8; 16] {
-                let mut result: [u8; 16] = unsafe { std::mem::uninitialized() };
-
-                // Assumes little endian
-                for i in 0..16 {
-                    result[i] = (self.key_segs[rnd * 4 + i % 4] >> (i / 4 * 8)) as u8;
-                }
-
-                result
             }
         }
 
